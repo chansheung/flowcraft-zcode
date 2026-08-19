@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// flowcraft-server v0.7.5(VERSION 常量,与 .zcode-plugin/plugin.json 的 version 同步改)
+// flowcraft-server v0.7.6(VERSION 常量,与 .zcode-plugin/plugin.json 的 version 同步改)
 // —— 配额三件套 + quota_reset + git_read + git_gate + principles + job_*(零依赖 stdio MCP 服务器)
 // 主代理专用读取通道:read 3 次/轮、grep 5 次/轮;glob 免配额;截断 ≤200 行/4000 字符;
 // 敏感路径(.env/密钥/凭据类)直接拒;Agent 派发(touch quota-reset.marker)或 quota_reset 重置。
@@ -18,7 +18,7 @@ const { spawn: cpSpawn, execSync, execFileSync } = require('child_process');
 
 // 版本单一来源:initialize 的 serverInfo 与本文件头注释都引用它;改版时与
 // .zcode-plugin/plugin.json 的 version 保持同步(0.7.0 两侧同步升)。
-const VERSION = '0.7.5';
+const VERSION = '0.7.6';
 
 const gitGate = require('./git-gate.js');
 // M4a:后台作业四工具(TOOLS/IMPL 导出形状与 git-gate.js 同款注册模式)
@@ -420,7 +420,14 @@ function loadPluginPrinciples() { return principlesLoad(principlesPluginPath(), 
 function saveProjectPrinciples(list) {
   const file = principlesProjectPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(list, null, 2), 'utf8');
+  // v0.7.6 P5:状态目录自忽略 —— 目标仓没配 gitignore 时 `git add .` 不会把
+  // 项目层原则误提交。内容一行 `*`;已存在不覆写;与仓库层自有 ignore 共存无害。
+  // (全局层 ~/.zcode/flowcraft 在家目录、不在任何仓内,无需处理。)
+  try {
+    const gi = path.join(path.dirname(file), '.gitignore');
+    if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n', 'utf-8');
+  } catch { /* 尽力而为,不影响原则写入 */ }
+  fs.writeFileSync(file, JSON.stringify(list, null, 2), 'utf-8');
 }
 function saveGlobalPrinciples(list) {
   const file = principlesGlobalPath();

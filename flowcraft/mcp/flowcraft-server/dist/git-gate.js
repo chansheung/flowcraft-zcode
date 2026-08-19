@@ -235,6 +235,13 @@ function saveLastApproval(projectDir) {
     const filePath = getLastApprovalPath(projectDir);
     const dir = path.join(filePath, '..');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // v0.7.6 P5:状态目录自忽略 —— 目标仓没配 gitignore 时 `git add .` 不会把
+    // .zcode-flowcraft(审批与审查全文)误提交。内容一行 `*`;已存在不覆写;
+    // 与仓库层自有 ignore 条目共存无害。
+    try {
+      const gi = path.join(dir, '.gitignore');
+      if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n', 'utf-8');
+    } catch { /* 尽力而为,不影响审批持久化 */ }
     fs.writeFileSync(filePath, JSON.stringify(serializeLastApproval(_lastApproval), null, 2), 'utf-8');
   } catch { /* 持久化失败静默(原版 log.debug 语义) */ }
 }
@@ -355,7 +362,12 @@ function isGateApproved() {
   // 强制 —— 那才是真正的守卫,不是 TTL。
   return _gate.state === 'approved';
 }
-function getGateStatusText() {
+// v0.7.6 P1:可选 projectDir —— scan/status 传入时对 approved 态做真实哈希比对
+// (filesNeedReReview)。commit 路径 :1030 的双保险早已拦截审后改动,本参数只是让
+// 排障输出不再误导(此前恒显 "valid while files unchanged" 却不比对)。未传
+// projectDir 的调用方(submit 各分支)行为不变;传了但暂存为空时不比对(与
+// status 原有的 staged.length > 0 条件一致)。
+function getGateStatusText(projectDir) {
   const g = _gate;
   switch (g.state) {
     case 'idle':
@@ -367,6 +379,16 @@ function getGateStatusText() {
     case 'reviewing':
       return 'REVIEW GATE: review in progress...';
     case 'approved': {
+      // P1 陈旧性比对:有暂存文件且哈希与批准快照不一致 → 改显警示行
+      //(commit 会被 filesNeedReReview 拦截,这里提前把事实摆到排障输出里)。
+      if (projectDir) {
+        try {
+          const stagedNow = getStagedFiles(projectDir);
+          if (stagedNow.length > 0 && filesNeedReReview(projectDir)) {
+            return `REVIEW GATE: approved BUT staged/approved files changed since review — re-review required before commit (commit will block) (${g.reviewedFiles.size} files reviewed)\nREADME: ${g.readmeChecked ? (g.readmeStatus === 'updated' ? '✅updated' : '⏭️not_needed') : '❌NOT CHECKED'}`;
+          }
+        } catch { /* 比对失败按未变更展示,不改变 commit 侧强制 */ }
+      }
       const readmeLine = g.readmeChecked
         ? `README: ${g.readmeStatus === 'updated' ? '✅updated' : '⏭️not_needed'}`
         : 'README: ❌NOT CHECKED';
@@ -622,6 +644,20 @@ function getCurrentBranch(projectDir) {
   return r.kind === 'ok' ? r.stdout.trim() : '';
 }
 
+// v0.7.6 P2:读取本地追踪引用 origin/<branch> 的当前值 —— 必须在 isFastForward
+// 的 fetch 之前调用(那把 fetch 会把追踪引用刷成远端现值,使无基线的
+// --force-with-lease 恒过,只防 fetch 后瞬间的新推送,不防"fetch 时远端已有的
+// 他人提交")。返回值作为显式 lease 传给 push:--force-with-lease=<branch>:<本值>
+// —— 远端若动到我们上次所知之外,强推被拒。无追踪引用(首推)或读取/形状异常
+// 返回 "",调用方回落普通 --force-with-lease(现行为)。
+function readTrackingRef(projectDir, branch) {
+  const r = runGitReadOnly(['rev-parse', '--verify', `refs/remotes/origin/${branch}`], { cwd: projectDir, timeout: 5000 });
+  if (r.kind !== 'ok') return '';
+  const v = r.stdout.trim();
+  // 40 位 SHA-1 / 64 位 SHA-256 对象格式都放行;其余形状(空/带警告文本)一律弃用。
+  return /^[0-9a-f]{6,64}$/i.test(v) ? v : '';
+}
+
 // git add 指定文件。调用前先 validateStagePaths。
 function gitStageFiles(projectDir, files) {
   execFileSync('git', gitArgs(['add', ...files]), gitOptions({
@@ -674,9 +710,15 @@ function isFastForward(projectDir, branch) {
 // stdio 管道/SIGTERM),成功时合并 stdout+stderr(各自 trim 后以换行拼接;皆空
 // 返回空串,由上层兜底文案接管);失败时抛与原 execFileSync 同形状的错
 // (status + stderr),上层 [push error] 分支零改动。
-function gitPush(projectDir, branch, force) {
+// v0.7.6 P2:leaseBaseline = fetch 前记录的本地追踪引用值(readTrackingRef)。
+// 非空时用显式 lease --force-with-lease=<branch>:<baseline> —— push 仅当远端
+// 当前值等于 baseline 才放行;远端在"我们上次所知"之后被动过(他人推送)即拒,
+// 提示先 fetch 审视。空值(首推无追踪引用/读取失败)回落普通 --force-with-lease
+// (现行为)。非 force push 不用 lease,零变化。
+function gitPush(projectDir, branch, force, leaseBaseline) {
+  const explicitLease = force && typeof leaseBaseline === 'string' && /^[0-9a-f]{6,64}$/i.test(leaseBaseline);
   const args = force
-    ? ['push', '--force-with-lease', 'origin', branch]
+    ? ['push', explicitLease ? `--force-with-lease=${branch}:${leaseBaseline}` : '--force-with-lease', 'origin', branch]
     : ['push', 'origin', branch];
   const r = spawnSync('git', gitArgs(args), gitOptions({
     cwd: projectDir, timeout: 30000, killSignal: 'SIGTERM',
@@ -822,7 +864,7 @@ function executeGitGate(args) {
       scanResult.summary,
       '',
       '=== REVIEW GATE STATUS ===',
-      getGateStatusText(),
+      getGateStatusText(projectDir), // v0.7.6 P1:approved 态做哈希比对,审后改内容改显警示行
       '',
     ];
     if (staged.length > 0 && !scanResult.blocked) {
@@ -976,12 +1018,16 @@ function executeGitGate(args) {
       `Reviewed files: ${gate.reviewedFiles.size}`,
       `Staged files: ${staged.length}`,
       needReReview ? 'Re-review needed: YES (staged files changed since last review)' : 'Re-review needed: NO',
-      getGateStatusText(),
+      getGateStatusText(projectDir), // v0.7.6 P1:approved 态哈希比对,警示行与上一行同源(filesNeedReReview)
       `README check: ${gate.readmeChecked ? (gate.readmeStatus === 'updated' ? '✅updated' : '⏭️not_needed') : '❌NOT CHECKED'}`,
     ];
     if (gate.state === 'approved') {
-      lines.push('');
-      lines.push('You may now run git commit/push (valid while files unchanged).');
+      // v0.7.6 P1:needReReview 时不再附 "You may now run commit/push"——那会与
+      // 上方 changed-since-review 警示行自相矛盾(commit 实际会被拦)。
+      if (!needReReview) {
+        lines.push('');
+        lines.push('You may now run git commit/push (valid while files unchanged).');
+      }
     } else if (gate.state !== 'idle') {
       lines.push('');
       lines.push(`Reviewer result: ${gate.reviewerResult ? String(gate.reviewerResult).slice(0, 200) : '(not yet)'}`);
@@ -1080,6 +1126,10 @@ function executeGitGate(args) {
     if (!branch || branch === 'HEAD') {
       return ok('[push BLOCKED] detached HEAD — cannot determine branch. Branch switching requires a coder sub-agent or manual operation.');
     }
+    // v0.7.6 P2:fetch 之前记录本地追踪引用现值 —— isFastForward 内的 fetch 会把
+    // 追踪引用刷成远端现值,届时再取就晚了(lease 恒过)。该值作为显式 lease 基线:
+    // 远端若在"我们上次所知"之后动过(他人推送),强推被拒并提示先 fetch 审视。
+    const leaseBaseline = force ? readTrackingRef(projectDir, branch) : '';
     const ff = isFastForward(projectDir, branch);
     if (!ff.ok && !force) {
       if (ff.reason === 'fetch-failed') {
@@ -1095,15 +1145,24 @@ function executeGitGate(args) {
     }
     let result;
     try {
-      result = gitPush(projectDir, branch, force);
+      result = gitPush(projectDir, branch, force, leaseBaseline);
     } catch (err) {
       const code = err?.status ?? err?.code ?? 'unknown';
       const stderr = String(err?.stderr ?? err?.message ?? '').slice(0, 500);
-      return ok(`[push error] exit ${code}: ${stderr}`);
+      // P2:force 被拒时说明 lease 语义 —— 远端动到了我们上次所知之外,先 fetch
+      // 审视他人提交,再重走流程(第二次 push 的基线已是 fetch 后的新所知)。
+      const leaseHint = force
+        ? `\n[force-with-lease rejected] Explicit lease baseline was ${leaseBaseline ? `${leaseBaseline.slice(0, 12)} (origin/${branch} as we last knew it, recorded BEFORE fetch)` : 'N/A — no tracking ref, plain --force-with-lease'}. The remote moved beyond what we last knew (someone pushed). Fetch and review the new remote commits first, then re-run the push flow.`
+        : '';
+      return ok(`[push error] exit ${code}: ${stderr}${leaseHint}`);
     }
     // v0.7.4:result 已含合并后的 stdout+stderr(refs 变更摘要在 stderr);
     // "(up to date)" 兜底仅在两者皆空时出现。
-    return ok(`=== PUSHED ${branch} → origin/${branch}${force ? ' (force-with-lease)' : ''} ===\n${result || '(up to date)'}`);
+    // v0.7.6 P2:force 输出注明所用 lease 基线值(空 = 无追踪引用,回落普通 lease)。
+    const leaseNote = force
+      ? ` (force-with-lease${leaseBaseline ? `, lease baseline ${leaseBaseline.slice(0, 12)} = pre-fetch origin/${branch}` : ' — no tracking ref, lease vs current tracking'})`
+      : '';
+    return ok(`=== PUSHED ${branch} → origin/${branch}${leaseNote} ===\n${result || '(up to date)'}`);
   }
 
   return ok(`Unknown action "${action}". Use: 'scan', 'submit', 'status', 'reset', 'stage', 'commit', or 'push'.`);

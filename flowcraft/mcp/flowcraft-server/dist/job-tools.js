@@ -39,6 +39,11 @@
 //      brew install tmux 后,缓存值不重启服务器不生效,新作业仍走直接 spawn 分支)。
 //      分支选择记入作业记录 tmux 字段;status() 探活按作业记录走——已在跑的作业
 //      维持其记录的分支不变;旧记录(无 tmux 字段)回退构造时缓存值,与历史行为一致。
+//  10. v0.7.6 P3:trap 的退出标记改 printf(echo 不解释 "\n",Linux 实测日志尾
+//      是字面 \n[flowcraft:exit:N]);标记格式不变,收割正则照旧命中。
+//  11. v0.7.6 P4:惰性清理加孤儿 tmux 会话回收(无 .json 记录且 session_created
+//      超 14 天的 flowcraft-job-* 才杀,保守语义;仅 POSIX 且 tmux 存在时执行)。
+//      v0.7.6 P5:JobRunner 构造时给 <root>/.zcode-flowcraft 落自忽略 .gitignore。
 //
 // WAIT_SLICE_MAX(Plan-B 降级开关):.mcp.json 已设 flowcraft 服务器
 // timeoutMs=7500000(2h5min)> job_wait 内部 2h 硬顶,正常路径内部优雅超时
@@ -313,6 +318,13 @@ class JobRunner {
         return;
       }
     }
+    // v0.7.6 P5:状态目录自忽略 —— recursive mkdir 连带创建的 <root>/.zcode-flowcraft
+    // 落 .gitignore(内容一行 `*`),目标仓没配 gitignore 时 `git add .` 不会把作业
+    // 记录/日志误提交。已存在不覆写;与仓库层自有 ignore 条目共存无害。
+    try {
+      const gi = path.join(projectRoot, '.zcode-flowcraft', '.gitignore');
+      if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n', 'utf-8');
+    } catch { /* 尽力而为,不影响作业功能 */ }
     // v0.7.4:此缓存仅供旧记录(无 tmux 字段)的 status 探活回退;start 的分支
     // 判定已改为每次 job_start 现探(见 start 内注释与文件头差异 9)。
     this.tmuxAvailable = this.detectTmux();
@@ -359,7 +371,11 @@ class JobRunner {
       // the trap is the exit status that triggered it (command's code on normal
       // exit, 128+signal on signal termination). The marker format is unchanged,
       // so status()'s /\[flowcraft:exit:(\d+)\]/ regex still matches.
-      fs.writeFileSync(scriptFile, `#!/bin/bash\ntrap 'echo "\\n[flowcraft:exit:$?]"' EXIT\n${command}\n`, { mode: 0o755 });
+      // v0.7.6 P3:echo → printf。bash 内建 echo 不解释 "\n"(Linux 实测日志尾是
+      // 字面 `\n[flowcraft:exit:0]`);printf 的格式串才解释转义,输出真换行。
+      // 引号嵌套:JS 模板串里 "\\n" → 脚本文件里字面 \n(printf 格式串),"$?"
+      // 经 %s 实参传入 —— 双引号包裹让 trap 展开时仍是参数而非格式串注入面。
+      fs.writeFileSync(scriptFile, `#!/bin/bash\ntrap 'printf "\\n[flowcraft:exit:%s]\\n" "$?"' EXIT\n${command}\n`, { mode: 0o755 });
 
       if (useTmux) {
         assertTmuxSession(tmuxSession);
@@ -520,15 +536,59 @@ function getRunner(root) {
   return runner;
 }
 
+// v0.7.6 P4:孤儿 tmux 会话回收。无作业记录(.json)的 flowcraft-job-* 会话
+// (崩溃丢记录 / TTL 删记录后)永不回收且 job_list 不可见 —— 在惰性清理里补一步。
+// 保守语义:仅当 ① 会话名/作业 id 形状合规(TMUX_SESSION_RE/SAFE_ID_RE 复用)、
+// ② 无对应 .json 记录、③ session_created 距今超过 JOBS_TTL_MS(14 天)三者齐备
+// 才 kill-session;14 天内不杀(可能是活作业但记录丢失的极端情形)。仅 POSIX
+// 且 tmux 存在时执行(win32 零开销跳过);整体 try/catch,异常绝不影响工具返回。
+function cleanupOrphanTmuxSessions(root) {
+  try {
+    if (platform() === 'win32') return; // tmux 不存在于 Windows,直接跳过
+    let knownIds;
+    try {
+      // 有 .json 记录的会话不是孤儿;jobs 目录缺失/读失败按"无记录"处理
+      //(目录可能已被整体移走,残留会话更该回收 —— 仍受 14 天保守门槛约束)。
+      knownIds = new Set(
+        fs.readdirSync(path.join(root, '.zcode-flowcraft', 'jobs'))
+          .filter((f) => f.endsWith('.json'))
+          .map((f) => f.replace(/\.json$/, ''))
+      );
+    } catch { knownIds = new Set(); }
+    // tmux ls 无会话时退出码非 0("no server running"/"error connecting")
+    // → execFileSync 抛 → 外层 catch 静默,正是"无事可回收"。
+    const ls = execFileSync('tmux', ['ls', '-F', '#{session_name} #{session_created}'], {
+      encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of String(ls).split(/\r?\n/)) {
+      const m = line.trim().match(/^(\S+)\s+(\d+)$/);
+      if (!m) continue;
+      const session = m[1];
+      if (!TMUX_SESSION_RE.test(session)) continue; // 只动 flowcraft-job-* 前缀会话
+      const jobId = session.replace(/^flowcraft-/, '');
+      if (!SAFE_ID_RE.test(jobId)) continue;
+      if (knownIds.has(jobId)) continue; // 有记录:不是孤儿,不动
+      const createdMs = Number(m[2]) * 1000; // tmux session_created 为 epoch 秒
+      if (!Number.isFinite(createdMs) || Date.now() - createdMs <= JOBS_TTL_MS) continue;
+      try {
+        execFileSync('tmux', ['kill-session', '-t', session], { stdio: 'ignore', timeout: 5000 });
+      } catch { /* 单会话杀失败不影响其余 */ }
+    }
+  } catch { /* tmux 缺失/无会话/清单失败:整体静默 */ }
+}
+
 // 惰性孤儿清理(移植自原版 cleanupExpiredJobs,目录切 .zcode-flowcraft/jobs;
 // 调用点:job_start / job_list 入口)。.json 按 14 天、其余(.log/.sh/.pid)按
 // 7 天 mtime unlink;30 分钟节流;整体 try/catch —— 清理异常绝不影响工具返回。
+// v0.7.6 P4:文件清理前先跑孤儿 tmux 会话回收(同样受 30 分钟节流;jobs 目录
+// 不存在也照跑 —— 那正对应"记录已整体消失"的孤儿场景)。
 let lastCleanupAt = 0;
 function maybeCleanupExpiredJobs(root) {
   try {
     const now = Date.now();
     if (now - lastCleanupAt < CLEANUP_THROTTLE_MS) return;
     lastCleanupAt = now;
+    cleanupOrphanTmuxSessions(root);
     const dir = path.join(root, '.zcode-flowcraft', 'jobs');
     if (!fs.existsSync(dir)) return;
     for (const file of fs.readdirSync(dir)) {

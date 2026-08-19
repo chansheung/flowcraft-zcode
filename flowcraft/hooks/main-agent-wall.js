@@ -140,6 +140,12 @@ process.stdin.on('end', () => {
             if (root) {
               const dir = path.join(root, '.zcode-flowcraft');
               fs.mkdirSync(dir, { recursive: true });
+              // v0.7.6 P5:状态目录自忽略 —— 目标仓没配 gitignore 时 `git add .` 不会把
+              // 派发账本误提交。内容一行 `*`;已存在不覆写;与仓库层自有 ignore 共存无害。
+              try {
+                const gi = path.join(dir, '.gitignore');
+                if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n', 'utf-8');
+              } catch { /* 尽力而为,不影响账本写入 */ }
               const ledgerPath = path.join(dir, 'gate-dispatch-ledger.json');
               // v0.7.4 并发安全:读改写走 withLedger(目录锁 + 原子写,见 ledger-io.js);
               // 读失败/非数组按 [] 传入 → 追加后照常写回 = 原有"损坏时自愈重写"语义不变。

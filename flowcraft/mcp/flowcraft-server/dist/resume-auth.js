@@ -72,6 +72,12 @@ function implResumeAuthorize(args) {
     const root = getRoot();
     const dir = path.join(root, '.zcode-flowcraft');
     fs.mkdirSync(dir, { recursive: true });
+    // v0.7.6 P5:状态目录自忽略 —— 目标仓没配 gitignore 时 `git add .` 不会把
+    // 授权标记误提交。内容一行 `*`;已存在不覆写;与仓库层自有 ignore 共存无害。
+    try {
+      const gi = path.join(dir, '.gitignore');
+      if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n', 'utf-8');
+    } catch { /* 尽力而为,不影响授权标记写入 */ }
     const markerPath = path.join(dir, 'resume-auth.json');
     // 单槽覆盖:新授权直接覆写旧标记(不做追加/排队)
     fs.writeFileSync(

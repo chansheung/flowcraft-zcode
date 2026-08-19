@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "flowcraft",
-      "version": "0.7.2",
+      "version": "0.7.6",
       "source": "./flowcraft",
       "description": "Multi-agent orchestration for ZCode — explore/planner/coder double-review pipeline, git gate, background jobs"
     }

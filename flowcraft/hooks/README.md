@@ -14,6 +14,7 @@
 - **subagent_type 白名单(0.4.5,墙扩展)**:Agent 派发时检查目标是否在 agents/ 定义的白名单内,内置代理(planner/coder/reviewer/reviewer2/writer/analyst/explore)以外拒止
 - **派发账本(0.6.0,M3b)**:墙 Agent 分支对 reviewer/reviewer2 派发自动写 `.zcode-flowcraft/gate-dispatch-ledger.json`(条目 {agent, ts, promptHash, promptHead, toolCallId},50 条上限,丢最旧);写入独立 try/catch,异常不阻断派发
 - **账本并发安全(0.7.4)**:两处账本写入(wall 派发 + marker 回填)统一走 ledger-io.js——目录锁(原子 mkdir 抢锁,1s 等待上限,fail-open 静默放弃) + tmp+rename 原子写;并行双审不再丢条目/写坏文件(Mac 实测曾致尾部双 ]] 且丢 reviewer 条目)
+- **状态目录自忽略(0.7.6)**:所有 .zcode-flowcraft 创建点(server 四处+hooks 两处)自动写目录内 .gitignore(内容 *),目标仓库未配 ignore 时 git add . 也不会误提交审批/账本状态
 - **reviewer 输出回填(0.6.0,M3b)**:quota-reset-marker(PostToolUse)把 reviewer/reviewer2 真实输出从 toolResponse.content 按 toolCallId 回填账本(≥10 字符);git_gate submit 硬校验消费账本,防编造审查结果;应急开关 HARD_LEDGER(git-gate.js 顶部,改 false 并重启回降级模式)
 
 **平台行为**:
