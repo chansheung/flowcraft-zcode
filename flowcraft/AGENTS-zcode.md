@@ -149,9 +149,10 @@ SendMessage 默认被墙拒绝。仅当用户主动提出续接某个已完成�
 ## principles 动态规则(0.4.1 起;注入闸门 0.4.2 起)
 
 - 三工具(主代理专用):`declare_principle {text, scope, layer?}`(scope 必填:all 或 7 代理名;text ≤800 字符;每 scope 组 ≤3 条且**按层独立计数不混层**,**reviewer/reviewer2 共享配额**;layer 默认 project,显式 "global" 写全局层)、`list_principles {agent?}`(合并 [GLOBAL]/[PROJECT] 清单;传 agent 时返回拼好的注入块)、`remove_principle {id, layer?}`(默认项目层;layer:"global" 可删全局条目)。
-- 双层存储(与 OpenCode 版完全脱钩):全局 `~/.zcode/flowcraft/principles.json`(工具管理,≤8 条 active;declare 需显式 layer:"global");项目层 `<项目根>/.flowcraft/principles.json`(declare 默认写入,**上限 20 条**,超限丢最旧)。旧 `~/.flowcraft/` 下的 OpenCode 文件不读取、不迁移、互不影响。
+- 双层存储(与 OpenCode 版完全脱钩):全局 `~/.zcode/flowcraft/principles.json`(工具管理,≤8 条 active;declare 需显式 layer:"global");项目层 `<项目根>/.zcode-flowcraft/principles.json`(declare 默认写入,**上限 20 条**,超限丢最旧)。旧 `~/.flowcraft/` 下的 OpenCode 文件不读取、不迁移、互不影响。
 - **注入闸门(0.4.2 起硬约束)**:墙在 Agent 派发前检查 prompt——缺"## 设计原则"标记且存在可注入原则(按目标代理 scope 过滤)时拒止,stderr 携带拼好的注入块,原样粘贴到派发 prompt 末尾重发即过;无可注入原则静默放行。等价重构原版 injectContext(ZCode hook 不能改工具参数,以"拒止+携带内容重发"达成同等强制性)。主动纪律仍推荐:派发前 `list_principles {agent}` 预取块可省一次往返。
 - scope 三红线:无 scope 条目永不注入;scope=all 全员注入;scope=reviewer 聚合 reviewer/reviewer2 双收。
+- **三层结构(0.7.3 起)**:全局层 `~/.zcode/flowcraft/principles.json` → 项目层 `<项目根>/.zcode-flowcraft/principles.json` → 插件随附层 `principles/plugin-principles.json`(只读,declare/remove 不触碰,条目标注 [PLUGIN])。三层合并展示,同文去重前层优先;插件层随插件分发两条 coder 纪律(复用优先/高危命令),新机器装插件即生效,无需手动 declare。
 
 ## 复用优先(Reuse Before Creating,原 coder principles 预设)
 

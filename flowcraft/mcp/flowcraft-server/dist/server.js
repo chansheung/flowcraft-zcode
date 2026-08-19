@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// flowcraft-server v0.7.2(VERSION 常量,与 .zcode-plugin/plugin.json 的 version 同步改)
+// flowcraft-server v0.7.3(VERSION 常量,与 .zcode-plugin/plugin.json 的 version 同步改)
 // —— 配额三件套 + quota_reset + git_read + git_gate + principles + job_*(零依赖 stdio MCP 服务器)
 // 主代理专用读取通道:read 3 次/轮、grep 5 次/轮;glob 免配额;截断 ≤200 行/4000 字符;
 // 敏感路径(.env/密钥/凭据类)直接拒;Agent 派发(touch quota-reset.marker)或 quota_reset 重置。
@@ -18,7 +18,7 @@ const { spawn: cpSpawn, execSync, execFileSync } = require('child_process');
 
 // 版本单一来源:initialize 的 serverInfo 与本文件头注释都引用它;改版时与
 // .zcode-plugin/plugin.json 的 version 保持同步(0.7.0 两侧同步升)。
-const VERSION = '0.7.2';
+const VERSION = '0.7.3';
 
 const gitGate = require('./git-gate.js');
 // M4a:后台作业四工具(TOOLS/IMPL 导出形状与 git-gate.js 同款注册模式)
@@ -386,6 +386,9 @@ ${dry ? '' : '本对话将中断;若重启后未自动恢复本对话,请从会�
 // 全局层最多 8 条 active;项目文件上限 20 条(超出丢最旧);注入块上限 20 条。
 // scope 白名单:all + planner/coder/reviewer/reviewer2/writer/analyst/explore。
 // v0.4.4 注入块格式与 hooks/principles-gate.js 逐字节一致(格式变更须双侧同步,以闸门为准)。
+// v0.7.3 插件随附层 <插件根>/principles/plugin-principles.json(随插件分发的只读底线原则,换机器不丢):
+// 仅 list_principles 展示与注入块合并(同文按 text.trim() 去重,全局/项目层优先,插件层副本丢弃);
+// declare_principle/remove_principle 不触碰本层(只读)。
 // =============================================================================
 const PRINCIPLE_TEXT_MAX = 800;
 const PRINCIPLES_PER_SCOPE_MAX = 3;
@@ -398,6 +401,9 @@ let principleIdSeq = 0;
 
 function principlesProjectPath() { return path.join(CWD, '.zcode-flowcraft', 'principles.json'); }
 function principlesGlobalPath() { return path.join(os.homedir(), '.zcode', 'flowcraft', 'principles.json'); }
+// v0.7.3 插件随附层:__dirname=mcp/flowcraft-server/dist,向上三级到插件根 flowcraft/,再进 principles/。
+// 按 __dirname 相对定位,不依赖环境变量;文件随插件分发,只读。
+function principlesPluginPath() { return path.resolve(__dirname, '..', '..', '..', 'principles', 'plugin-principles.json'); }
 function principlesLoad(file, cap) {
   try {
     if (!fs.existsSync(file)) return [];
@@ -408,6 +414,9 @@ function principlesLoad(file, cap) {
 }
 function loadProjectPrinciples() { return principlesLoad(principlesProjectPath(), 0); }
 function loadGlobalPrinciples() { return principlesLoad(principlesGlobalPath(), PRINCIPLES_GLOBAL_MAX); }
+// 插件层 cap=0(不去 active 过滤、不截断——条目无 active 字段,缺失视为 active,与闸门 e.active===false 语义一致);
+// principlesLoad 自带 existsSync/JSON.parse try/catch,文件缺失或损坏 = 无插件层。
+function loadPluginPrinciples() { return principlesLoad(principlesPluginPath(), 0); }
 function saveProjectPrinciples(list) {
   const file = principlesProjectPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -481,29 +490,47 @@ function toolRemovePrinciple(args) {
 function toolListPrinciples(args) {
   const globalP = loadGlobalPrinciples();
   const projectP = loadProjectPrinciples().filter(p => p.active);
-  const seen = new Set(globalP.map(p => p.text));
-  const all = [...globalP, ...projectP.filter(p => !seen.has(p.text))];
+  // v0.7.3 插件随附层:无 active 字段视为 active(仅显式 false 跳过,与闸门语义一致)。
+  const pluginP = loadPluginPrinciples().filter(p => p.active !== false);
+  const trim = (t) => String(t || '').trim();
+  // 展示去重(按 text.trim() 同文,首个出现者胜):全局/项目层优先,插件层副本丢弃不显示。
+  const seenDisplay = new Set(globalP.map(p => trim(p.text)));
+  const projectKept = projectP.filter(p => !seenDisplay.has(trim(p.text)));
+  const pluginKept = [];
+  for (const p of pluginP) {
+    const k = trim(p.text);
+    if (!k || seenDisplay.has(k)) continue; // 同文:全局/项目优先,插件副本丢弃
+    seenDisplay.add(k); // 插件层内部同文同样首条胜
+    pluginKept.push(p);
+  }
+  const all = [...globalP, ...projectKept, ...pluginKept];
   const agent = args.agent === undefined ? undefined : String(args.agent);
   let out = '';
   if (all.length === 0) out = '(无 active 原则)';
   else {
-    const globalTexts = new Set(globalP.map(p => p.text));
+    const globalTexts = new Set(globalP.map(p => trim(p.text)));
+    const projectTexts = new Set(projectKept.map(p => trim(p.text)));
     out = all.map((p, i) => {
-      const source = globalTexts.has(p.text) ? 'GLOBAL' : 'PROJECT';
+      const t = trim(p.text);
+      const source = globalTexts.has(t) ? 'GLOBAL' : projectTexts.has(t) ? 'PROJECT' : 'PLUGIN';
       const scopeTag = p.scope ? `[scope:${p.scope}]` : '[scope:unset-legacy]';
-      return `[${i + 1}] [${source}] ${scopeTag} ${p.text} (by ${p.declaredBy}, ${p.createdAt})`;
+      const meta = source === 'PLUGIN' ? 'plugin-shipped, read-only' : `by ${p.declaredBy}, ${p.createdAt}`;
+      return `[${i + 1}] [${source}] ${scopeTag} ${p.text} (${meta})`;
     }).join('\n');
   }
   if (agent === undefined || agent === '') return ok(out);
-  // 注入块:按 scope 过滤(all + agent 本名 + reviewer 聚合双收)。
+  // 注入块:按 scope 过滤(all + agent 本名 + reviewer 聚合双收),插件层同样参与过滤。
   // v0.4.4 与 hooks/principles-gate.js 逐字节对齐(格式变更须双侧同步):
-  // 全局在前+项目在后按文件顺序单趟遍历、按 text 去重(首个出现者胜)、上限 20 条即止、文本原样不截断。
+  // 全局在前+项目居中+插件随附殿后按文件顺序单趟遍历、按 text.trim() 去重(首个出现者胜)、
+  // 上限 20 条即止、文本原样不截断。
   const pickedTexts = [];
   const seen2 = new Set();
-  for (const p of [...globalP, ...projectP]) {
+  for (const p of [...globalP, ...projectP, ...pluginP]) {
     if (!principleScopeMatches(p, agent)) continue;
-    if (seen2.has(p.text)) continue;
-    seen2.add(p.text);
+    const k = trim(p.text);
+    if (!k) continue; // 空文本守卫,与 principles-gate.js:48 的 !key 语义对齐
+    if (seen2.has(k)) continue;
+    seen2.add(k);
     pickedTexts.push(p.text);
     if (pickedTexts.length >= PRINCIPLES_INJECT_MAX) break;
   }
@@ -521,7 +548,7 @@ const TOOLS = [
   { name: 'restart_zcode', description: '重启 ZCode 桌面端(让新插件/配置生效)。仅在用户明确要求重启时调用,必须传 confirm="restart";可先传 dryRun:true 演练(只写日志不执行)。', inputSchema: { type: 'object', properties: { confirm: { type: 'string', description: '固定传 "restart"' }, dryRun: { type: 'boolean', description: 'true=演练模式,只写日志不执行' } }, required: ['confirm'] } },
   { name: 'git_read', description: '只读 git 查询工具。5 个 action:diff(看改动)、log(提交历史)、branch(列分支)、show(看具体提交)、status(改动/暂存/未跟踪文件)。拦截所有写操作(add/commit/push/reset/checkout 等)与危险 flag;log 支持 -N 简写(等价 --max-count=N);含空格的值用引号包裹,如 --format="%h %s"。', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['diff', 'log', 'branch', 'show', 'status'], description: 'diff / log / branch / show / status 之一' }, args: { type: 'string', description: '附加参数(flag + 路径/引用),如 "HEAD" 或 \'--format="%h %s" -5\'' }, cwd: { type: 'string', description: 'git 仓库目录(默认服务器 CWD)' } }, required: ['action'] } },
   { name: 'declare_principle', description: '主代理专用。登记一条设计原则,后续所有子代理任务必须遵守(用户确认核心决策后使用)。scope 必填;每个 scope 组上限 3 条(仅计当前层,不混层;reviewer/reviewer2 共享配额);文本上限 800 字符;项目文件上限 20 条(超出丢最旧)。layer 默认 "project" 写入项目层 .zcode-flowcraft/principles.json;layer="global"(需显式指定)写入全局层 ~/.zcode/flowcraft/principles.json,全局最多 8 条 active。', inputSchema: { type: 'object', properties: { text: { type: 'string', description: '原则文本(≤800 字符)' }, scope: { type: 'string', enum: ['all', 'planner', 'coder', 'reviewer', 'reviewer2', 'writer', 'analyst', 'explore'], description: '"all"=所有代理;"reviewer"=聚合 reviewer/reviewer2(声明一次,两者都收);其余为单代理名' }, layer: { type: 'string', enum: ['project', 'global'], description: '存储层:默认 "project"(项目层 .zcode-flowcraft/principles.json);写全局层需显式传 "global"(~/.zcode/flowcraft/principles.json,配额按全局层独立计数,最多 8 条 active)' } }, required: ['text', 'scope'] } },
-  { name: 'list_principles', description: '主代理专用。列出全部设计原则(全局 [GLOBAL] 来自 ~/.zcode/flowcraft/principles.json + 项目 [PROJECT],含 scope 标签)。派发子代理前传 agent 参数,额外返回按 scope 过滤(all + agent 本名 + reviewer 聚合)拼好的注入块,直接粘贴到 task prompt 末尾。', inputSchema: { type: 'object', properties: { agent: { type: 'string', description: '目标代理名(planner/coder/reviewer/reviewer2/writer/analyst/explore);传入则额外返回注入块' } } } },
+  { name: 'list_principles', description: '主代理专用。列出全部设计原则(全局 [GLOBAL] 来自 ~/.zcode/flowcraft/principles.json + 项目 [PROJECT] + 插件随附 [PLUGIN](只读,同文时被全局/项目层覆盖),含 scope 标签)。派发子代理前传 agent 参数,额外返回按 scope 过滤(all + agent 本名 + reviewer 聚合)拼好的注入块,直接粘贴到 task prompt 末尾。', inputSchema: { type: 'object', properties: { agent: { type: 'string', description: '目标代理名(planner/coder/reviewer/reviewer2/writer/analyst/explore);传入则额外返回注入块' } } } },
   { name: 'remove_principle', description: '主代理专用。按 id 移除设计原则(立即生效,无二次确认;误删可重新 declare)。layer 默认 "project" 只动项目层;删全局条目需显式传 layer:"global"。id 从 list_principles 输出获取。', inputSchema: { type: 'object', properties: { id: { type: 'string', description: '原则 id,如 "p1700000000000-1"' }, layer: { type: 'string', enum: ['project', 'global'], description: '存储层:默认 "project";删全局层条目需显式传 "global"' } }, required: ['id'] } },
   // git_gate(M3a)——实现与 description/schema 全在 dist/git-gate.js(参照 restart-watchdog.js
   // 多文件先例),此处只做注册;授权原则权威措辞对齐原版 events.ts L122-128/L153。

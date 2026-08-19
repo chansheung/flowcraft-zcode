@@ -1,0 +1,14 @@
+[
+  {
+    "id": "plugin-p1",
+    "scope": "coder",
+    "text": "复用优先与技能优先：创建新文件、新导出函数/类、或超 20 行新逻辑前，必须先搜代码库找现有实现，有则优先复用，无则说明搜索结论。排除：现有文件的 bug 修复、trivial helper、/tmp 分析脚本。任务与现有 skill 匹配时优先用 skill。",
+    "note": "shipped with flowcraft plugin (read-only layer)"
+  },
+  {
+    "id": "plugin-p2",
+    "scope": "coder",
+    "text": "高危命令纪律：以下命令禁止未经确认直接执行（任何途径：Bash、脚本、管道、子进程）：rm -r/-rf、rm 通配删除（rm * 等）、git push --force、git clean -f/-d/-x、git reset --hard、chmod -R 作用于根/系统路径、dd if=、DROP/TRUNCATE TABLE、curl/wget 结果管道进 bash/sh。替代做法：先 ls/glob 列出目标确认范围，再逐个精确删除或改用可逆操作；确属必要时，先报告主代理说明理由与影响范围，由用户决策后再动。job_start 已有服务端硬闸，本条覆盖直接 Bash 路径。",
+    "note": "shipped with flowcraft plugin (read-only layer)"
+  }
+]

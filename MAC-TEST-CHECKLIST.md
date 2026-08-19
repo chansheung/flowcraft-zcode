@@ -15,6 +15,7 @@
 - [ ] Agent 工具描述含 7 个 flowcraft 子代理(coder 带纪律尾巴)
 - [ ] 技能列表含 resume / grill-me / grilling
 - [ ] MCP 15 工具:让主代理调 mcp read 读小文件,秒回
+- [ ] 调 mcp__plugin_flowcraft_flowcraft__list_principles:全新机器应显示 [PLUGIN] 两条(复用优先/高危命令);本机已有同文全局层则显示 [GLOBAL] 且无重复
 ### 2 主代理墙(5min)
 - [ ] 主代理直调 Bash → 被拒(分流文案)
 - [ ] 派 coder 跑 node -v → 放行

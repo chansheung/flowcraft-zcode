@@ -1,4 +1,4 @@
-# flowcraft (M1 骨架, v0.7.2)
+# flowcraft (M1 骨架, v0.7.3)
 
 flowcraft v0.7.2(OpenCode 编程式插件)→ ZCode 声明式插件的迁移产物。迁移蓝图:`Downloads/flowcraft-zcode-migration-blueprint.md`(v1.2)。本包 = 蓝图 **M1 里程碑**精简版:7 个子代理 + 行为规则模板,job_*(M4)已上线。命令、技能、vision 代理按需求裁剪,要恢复时从源材料拷回即可(蓝图 §1.5/§1.6)。
 
@@ -9,11 +9,12 @@ flowcraft v0.7.2(OpenCode 编程式插件)→ ZCode 声明式插件的迁移产�
 | `.zcode-plugin/plugin.json` | 插件清单(agents + mcpServers 两组件;**未声明 hooks——M4 前休眠**) | ✅ |
 | `agents/` ×7 | planner / coder / reviewer / reviewer2 / writer / analyst / explore(prompt 逐字迁移 + ZCode 工具映射补充段 + injectAgentsMd: false 不注入 AGENTS.md;0.7.2 起 coder frontmatter 加 Skill 工具——子代理可载入技能,AGENTS-zcode.md P1 的 skill 优先条款对 coder 生效,已平台验证) | ✅ |
 | `AGENTS-zcode.md` | 工作区指令模板——放入目标仓库 `AGENTS.md`(0.5.0 起新增派发沟通纪律节) | ✅ |
-| `.mcp.json` + `mcp/flowcraft-server/` | v0.4.1 服务器(零依赖):配额三件套(read 3/轮、grep 5/轮、glob 免配额、quota_reset);git_read 五 action 只读;git_gate 七 action 提交闸门+防伪造派发账本(0.6.0);principles 三工具(双层存储/按层配额/注入块,全局层 ~/.zcode/flowcraft/ 与 OpenCode 脱钩);restart_zcode 跨平台重启;resume_authorize(0.7.1, M4.5:续接单次授权标记);job_* 四工具(0.7.0, M4:job_start/job_wait/job_status/job_list,仅 coder 可启动);`.mcp.json` 设 timeoutMs: 7500000(2h5min 兜底,> job_wait 内部单次 2h 硬顶,保证内部优雅超时先于客户端超时) | ✅ |
+| `.mcp.json` + `mcp/flowcraft-server/` | v0.4.1 服务器(零依赖):配额三件套(read 3/轮、grep 5/轮、glob 免配额、quota_reset);git_read 五 action 只读;git_gate 七 action 提交闸门+防伪造派发账本(0.6.0);principles 三工具(双层存储/按层配额/注入块,全局层 ~/.zcode/flowcraft/ 与 OpenCode 脱钩;0.7.3 起三层结构:全局层 → 项目层 → 插件随附层,同文去重前层优先,插件层只读);restart_zcode 跨平台重启;resume_authorize(0.7.1, M4.5:续接单次授权标记);job_* 四工具(0.7.0, M4:job_start/job_wait/job_status/job_list,仅 coder 可启动);`.mcp.json` 设 timeoutMs: 7500000(2h5min 兜底,> job_wait 内部单次 2h 硬顶,保证内部优雅超时先于客户端超时) | ✅ |
 | `hooks/` | 主代理哑墙 v1(执行类拒止 + 读取切配额通道 + 双审派发账本自动记账+真实输出回填,双平台实测生效)+ PostToolUse 派发重置+账本回填(已启用)+ job_start 精确拒绝(0.7.0, M4;主代理禁启动后台作业,job_wait/status/list 走前缀放行)+ SendMessage 精确拒绝+单次授权标记放行(0.7.1, M4.5,fail-closed 分支) | ✅ v1+M3b |
 | `skills/resume/` | 续接技能(按需载入):SendMessage 单次授权续接流程 | ✅ 0.7.1 |
 | `skills/grill-me/` | 用户入口跳板技能:触发 grilling(mattpocock/skills MIT 原版移植) | ✅ 0.7.2 |
 | `skills/grilling/` | 决策树分轮质询技能(严苛拷问计划/决策;mattpocock/skills MIT 原版移植) | ✅ 0.7.2 |
+| `principles/plugin-principles.json` | 插件随附 principles 层(两条 coder 纪律,三层合并只读) | ✅ 0.7.3 |
 
 ## 安装(本地市场)
 
@@ -59,4 +60,5 @@ M3(阶段二b)  git_gate 已上线(0.6.0):7 action 全量+派发账本防伪造+
 M4(0.7.0)    job_* 四工具上线:job_start 仅 coder(主代理被墙精确拒绝),wait/status/list 主代理可用;job_wait 单次最长 2h 链式续等 ✅(2026-08-19)
 M4.5(0.7.1)  SendMessage 单次授权续接(墙精确拒绝+resume_authorize 标记放行一条即焚)+ resume 技能 ✅(2026-08-19)
 M4.6(0.7.2)  grill-me/grilling 技能上游移植 + coder frontmatter 加 Skill 工具(子代理技能可用,已平台验证) + Mac 部署测试清单 ✅(2026-08-19)
+0.7.3        principles 插件随附层(随插件分发,新机器免手动 declare;三层合并/同文去重) ✅(2026-08-19)
 ```
