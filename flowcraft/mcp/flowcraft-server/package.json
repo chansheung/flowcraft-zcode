@@ -1,0 +1,7 @@
+{
+  "name": "flowcraft-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "flowcraft MCP server (M1 stub: connects with empty tool list; M2/M3 replace dist/server.js with the real build)",
+  "engines": { "node": ">=18" }
+}

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "flowcraft": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/flowcraft-server/dist/server.js"],
+      "timeoutMs": 7500000,
+      "env": { "FLOWCRAFT_CWD": "${CLAUDE_PROJECT_DIR}" }
+    }
+  }
+}
