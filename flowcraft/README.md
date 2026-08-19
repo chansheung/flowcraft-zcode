@@ -1,4 +1,4 @@
-# flowcraft (M1 骨架, v0.7.4)
+# flowcraft (M1 骨架, v0.7.5)
 
 flowcraft v0.7.2(OpenCode 编程式插件)→ ZCode 声明式插件的迁移产物。迁移蓝图:`Downloads/flowcraft-zcode-migration-blueprint.md`(v1.2)。本包 = 蓝图 **M1 里程碑**精简版:7 个子代理 + 行为规则模板,job_*(M4)已上线。命令、技能、vision 代理按需求裁剪,要恢复时从源材料拷回即可(蓝图 §1.5/§1.6)。
 
@@ -62,4 +62,5 @@ M4.5(0.7.1)  SendMessage 单次授权续接(墙精确拒绝+resume_authorize 标
 M4.6(0.7.2)  grill-me/grilling 技能上游移植 + coder frontmatter 加 Skill 工具(子代理技能可用,已平台验证) + Mac 部署测试清单 ✅(2026-08-19)
 0.7.3        principles 插件随附层(随插件分发,新机器免手动 declare;三层合并/同文去重) ✅(2026-08-19)
 0.7.4        Mac 实测三修复:账本并发竞态(锁+原子写)/tmux 按次探测/git_gate push 输出 ✅(2026-08-19)
+0.7.5        AGENTS-zcode.md 瘦身(204→~170 行,规则零丢失) + writer.md 删与墙矛盾的 AGENTS.md 例外句 ✅(2026-08-19)
 ```
