@@ -21,6 +21,10 @@
 //   5. runGitReadOnly 的重试层照原版移植(attempts=2,ETIMEDOUT 窄谓词)——与
 //      server.js git_read 段"不移植重试层"的决定不同,因为这里 merge-base 超时
 //      会映射为 check-failed 文案"(retried once)",保留重试才使该文案属实。
+//   6. v0.7.4 gitPush 改用 spawnSync 并在成功路径合并 stderr:git push 的 refs
+//      变更摘要写 stderr、stdout 恒空,原 execFileSync 只回 stdout 导致 push 恒显
+//      "(up to date)"(Mac 实测)。失败路径抛同形状错(status + stderr),
+//      [push error] 分支零改动;兜底文案仅在 stdout+stderr 皆空时出现。
 //
 // KEEP-IN-SYNC(原版 3 层角色分离的移植注记):
 //   (1) 工具 description = 选择期行为(前置防误路由);
@@ -33,7 +37,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const PROCESS_START_MS = Date.now();
 
@@ -664,13 +668,29 @@ function isFastForward(projectDir, branch) {
 }
 
 // push 当前分支到 origin。force 时加 --force-with-lease(比 --force 安全)。
+// v0.7.4:git push 的 refs 变更摘要("To <remote> ... <branch> -> <branch>")写在
+// stderr、stdout 恒空——execFileSync 成功路径只返回 stdout,上层恒显
+// "(up to date)"(Mac 实测)。改用 spawnSync(同一 gitOptions:数组参数 RCE 纪律/
+// stdio 管道/SIGTERM),成功时合并 stdout+stderr(各自 trim 后以换行拼接;皆空
+// 返回空串,由上层兜底文案接管);失败时抛与原 execFileSync 同形状的错
+// (status + stderr),上层 [push error] 分支零改动。
 function gitPush(projectDir, branch, force) {
   const args = force
     ? ['push', '--force-with-lease', 'origin', branch]
     : ['push', 'origin', branch];
-  return execFileSync('git', gitArgs(args), gitOptions({
+  const r = spawnSync('git', gitArgs(args), gitOptions({
     cwd: projectDir, timeout: 30000, killSignal: 'SIGTERM',
-  })).trim();
+  }));
+  if (r.error) throw r.error; // spawn 级失败(超时找不到 git 等):原 execFileSync 同样抛
+  if (r.status !== 0) {
+    const err = new Error(`git push failed (exit ${r.status})`);
+    err.status = r.status;
+    err.stderr = typeof r.stderr === 'string' ? r.stderr : '';
+    throw err;
+  }
+  const stdout = typeof r.stdout === 'string' ? r.stdout.trim() : '';
+  const stderr = typeof r.stderr === 'string' ? r.stderr.trim() : '';
+  return [stdout, stderr].filter(Boolean).join('\n');
 }
 
 // `git status --short` 输出。
@@ -1081,6 +1101,8 @@ function executeGitGate(args) {
       const stderr = String(err?.stderr ?? err?.message ?? '').slice(0, 500);
       return ok(`[push error] exit ${code}: ${stderr}`);
     }
+    // v0.7.4:result 已含合并后的 stdout+stderr(refs 变更摘要在 stderr);
+    // "(up to date)" 兜底仅在两者皆空时出现。
     return ok(`=== PUSHED ${branch} → origin/${branch}${force ? ' (force-with-lease)' : ''} ===\n${result || '(up to date)'}`);
   }
 

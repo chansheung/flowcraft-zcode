@@ -34,6 +34,11 @@
 //      整体 try/catch,清理异常绝不影响工具返回。
 //   8. pollUntil 移植为 async 睡眠轮询(await new Promise(r=>setTimeout(r,ms)),
 //      禁止同步忙等);maxAttempts = Math.ceil(cap/4000)+50 公式照原版保留。
+//   9. v0.7.4 tmux 按次现探:start() 的 tmux/直接 spawn 分支判定不再用构造时缓存
+//      一次的 this.tmuxAvailable,改为每次 job_start 现探(Mac 实测:会话中途
+//      brew install tmux 后,缓存值不重启服务器不生效,新作业仍走直接 spawn 分支)。
+//      分支选择记入作业记录 tmux 字段;status() 探活按作业记录走——已在跑的作业
+//      维持其记录的分支不变;旧记录(无 tmux 字段)回退构造时缓存值,与历史行为一致。
 //
 // WAIT_SLICE_MAX(Plan-B 降级开关):.mcp.json 已设 flowcraft 服务器
 // timeoutMs=7500000(2h5min)> job_wait 内部 2h 硬顶,正常路径内部优雅超时
@@ -308,6 +313,8 @@ class JobRunner {
         return;
       }
     }
+    // v0.7.4:此缓存仅供旧记录(无 tmux 字段)的 status 探活回退;start 的分支
+    // 判定已改为每次 job_start 现探(见 start 内注释与文件头差异 9)。
     this.tmuxAvailable = this.detectTmux();
     this.reconcile();
   }
@@ -332,9 +339,13 @@ class JobRunner {
 
     assertPathInside(this.jobsDir, logFile);
 
+    // v0.7.4 按次现探(见文件头差异 9):Mac 实测会话中途安装 tmux 后,构造时缓存
+    // 的 this.tmuxAvailable 不重启不生效。win32 恒 false 零开销;POSIX which tmux
+    // try/catch 默认 false。分支选择记入作业记录 tmux 字段,status 探活按记录走。
+    const useTmux = this.detectTmux();
     const job = {
       id, command, tmuxSession, status: 'running',
-      startedAt: now, logFile, owner, purpose,
+      startedAt: now, logFile, owner, purpose, tmux: useTmux,
     };
     this.save(job);
 
@@ -350,7 +361,7 @@ class JobRunner {
       // so status()'s /\[flowcraft:exit:(\d+)\]/ regex still matches.
       fs.writeFileSync(scriptFile, `#!/bin/bash\ntrap 'echo "\\n[flowcraft:exit:$?]"' EXIT\n${command}\n`, { mode: 0o755 });
 
-      if (this.tmuxAvailable) {
+      if (useTmux) {
         assertTmuxSession(tmuxSession);
         execFileSync('tmux', ['new-session', '-d', '-s', tmuxSession, '-c', this.projectRoot, 'bash', '-c', `bash '${scriptFile}' > '${logFile}' 2>&1`], {
           stdio: 'pipe', timeout: 10000,
@@ -396,9 +407,12 @@ class JobRunner {
     if (!job) return null;
     if (job.status !== 'running') return job;
 
+    // v0.7.4:探活分支按作业记录走(见 start 的按次现探说明)——已在跑的作业维持
+    // 其记录的分支不变;旧记录(无 tmux 字段)回退构造时缓存值,与历史行为一致。
+    const useTmux = job.tmux === undefined ? this.tmuxAvailable : job.tmux === true;
     let isRunning = false;
     try {
-      if (this.tmuxAvailable) {
+      if (useTmux) {
         assertTmuxSession(job.tmuxSession);
         execFileSync('tmux', ['has-session', '-t', job.tmuxSession], { stdio: 'pipe', timeout: 5000 });
         isRunning = true;

@@ -18,6 +18,9 @@
 // quota-reset-marker.js 在 Post 侧按此精确匹配回填 reviewer 真实 output;取不到则省略该字段。
 // M4/v0.7.0 — job_start precise denial (main agent), job_wait/status/list pass via prefix allow
 // M4.5/v0.7.1 — SendMessage precise denial with single-use resume_authorize marker (fail-closed branch)
+// v0.7.4 并发安全:派发账本读改写改走 ledger-io.js 的 withLedger(目录锁串行化 +
+// tmp/rename 原子落盘)——并行双审时多 wall 进程并发写会丢条目/写坏文件致 submit 全拒(Mac 实测),
+// fail-open 语义不变(锁超时/异常静默放弃,绝不阻断派发)。
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -138,23 +141,24 @@ process.stdin.on('end', () => {
               const dir = path.join(root, '.zcode-flowcraft');
               fs.mkdirSync(dir, { recursive: true });
               const ledgerPath = path.join(dir, 'gate-dispatch-ledger.json');
-              let entries = [];
-              try {
-                const raw = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
-                if (Array.isArray(raw)) entries = raw; // 读失败/非数组按空数组自愈
-              } catch {}
-              // M3b P3:附 toolCallId(camelCase 优先,snake 别名兜底;spike 实测两命名并存)。
-              // 展开写法使取不到时整个字段缺席(JSON.stringify 不会留下 undefined 键)。
-              const toolCallId = input.toolCallId || input.tool_use_id || '';
-              entries.push({
-                agent: bare,
-                ts: Date.now(),
-                ...(toolCallId ? { toolCallId } : {}),
-                promptHash: crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16),
-                promptHead: prompt.replace(/\s+/g, ' ').trim().slice(0, 80),
+              // v0.7.4 并发安全:读改写走 withLedger(目录锁 + 原子写,见 ledger-io.js);
+              // 读失败/非数组按 [] 传入 → 追加后照常写回 = 原有"损坏时自愈重写"语义不变。
+              // 惰性 require:ledger-io.js 缺失时被本层 try/catch 兜住,fail-open 不变。
+              const { withLedger } = require('./ledger-io.js');
+              withLedger(ledgerPath, (entries) => {
+                // M3b P3:附 toolCallId(camelCase 优先,snake 别名兜底;spike 实测两命名并存)。
+                // 展开写法使取不到时整个字段缺席(JSON.stringify 不会留下 undefined 键)。
+                const toolCallId = input.toolCallId || input.tool_use_id || '';
+                entries.push({
+                  agent: bare,
+                  ts: Date.now(),
+                  ...(toolCallId ? { toolCallId } : {}),
+                  promptHash: crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16),
+                  promptHead: prompt.replace(/\s+/g, ' ').trim().slice(0, 80),
+                });
+                entries.sort((a, b) => (Number(b && b.ts) || 0) - (Number(a && a.ts) || 0));
+                return entries.slice(0, 50); // 返回数组 → withLedger 原子写回
               });
-              entries.sort((a, b) => (Number(b && b.ts) || 0) - (Number(a && a.ts) || 0));
-              fs.writeFileSync(ledgerPath, JSON.stringify(entries.slice(0, 50), null, 2));
             }
           } catch { /* fail-open:账本异常不得阻断派发 */ }
         }

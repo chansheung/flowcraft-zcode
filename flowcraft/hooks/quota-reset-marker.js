@@ -9,6 +9,10 @@
 // ts 晚于(当前时间-10分钟)的最新条目。拼接文本 <10 字符不回填(与原版 recordReviewOutput
 // 门槛对齐);status 非 completed 也照录文本。回填独立 try/catch 全包 fail-open,
 // 任何异常不影响 marker 触写与 exit code。
+// v0.7.4 并发安全:回填的账本读改写改走 ledger-io.js 的 withLedger(目录锁串行化 +
+// tmp/rename 原子落盘)——与 main-agent-wall.js 的派发写并发时原实现会丢条目/写坏
+// 文件致 submit 全拒(Mac 实测);无命中时 mutateFn 不返回数组即不写,与原
+// "无账本/损坏/无命中即跳过"语义一致,fail-open 不变。
 const fs = require('fs');
 const path = require('path');
 
@@ -37,31 +41,31 @@ function backfillReviewerOutput(input) {
   const root = input.cwd || process.env.FLOWCRAFT_CWD || '';
   if (!root) return;
   const ledgerPath = path.join(root, '.zcode-flowcraft', 'gate-dispatch-ledger.json');
-  let entries;
-  try {
-    const raw = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
-    if (!Array.isArray(raw)) return;
-    entries = raw;
-  } catch { return; } // 无账本/损坏 JSON:跳过
-  const toolCallId = input.toolCallId || input.tool_use_id || '';
-  let hit = null;
-  if (toolCallId) {
-    hit = entries.find(e => e && typeof e === 'object' && e.toolCallId === toolCallId) || null;
-  }
-  if (!hit) {
-    // 回退:同 agent 名、尚无 output、ts 晚于(当前时间-10分钟)的最新条目
-    const cutoff = Date.now() - 10 * 60 * 1000;
-    hit = entries
-      .filter(e =>
-        e && typeof e === 'object' &&
-        String(e.agent) === bare &&
-        !(typeof e.output === 'string' && e.output.trim().length > 0) &&
-        entryTs(e) > cutoff)
-      .sort((a, b) => entryTs(b) - entryTs(a))[0] || null;
-  }
-  if (!hit) return;
-  hit.output = text;
-  fs.writeFileSync(ledgerPath, JSON.stringify(entries, null, 2));
+  // v0.7.4 并发安全:读改写走 withLedger(目录锁 + 原子写,见 ledger-io.js)。
+  // 读失败/非数组按 [] 传入 → 无命中即不写,与原"无账本/损坏 JSON:跳过"语义一致。
+  // 惰性 require:ledger-io.js 缺失时被调用点外层 try/catch 兜住,fail-open 不变。
+  const { withLedger } = require('./ledger-io.js');
+  withLedger(ledgerPath, (entries) => {
+    const toolCallId = input.toolCallId || input.tool_use_id || '';
+    let hit = null;
+    if (toolCallId) {
+      hit = entries.find(e => e && typeof e === 'object' && e.toolCallId === toolCallId) || null;
+    }
+    if (!hit) {
+      // 回退:同 agent 名、尚无 output、ts 晚于(当前时间-10分钟)的最新条目
+      const cutoff = Date.now() - 10 * 60 * 1000;
+      hit = entries
+        .filter(e =>
+          e && typeof e === 'object' &&
+          String(e.agent) === bare &&
+          !(typeof e.output === 'string' && e.output.trim().length > 0) &&
+          entryTs(e) > cutoff)
+        .sort((a, b) => entryTs(b) - entryTs(a))[0] || null;
+    }
+    if (!hit) return; // 无命中:不返回数组 → withLedger 不写,直接释放锁
+    hit.output = text;
+    return entries; // 返回数组 → withLedger 原子写回(顺序不变)
+  });
 }
 
 let d = '';
