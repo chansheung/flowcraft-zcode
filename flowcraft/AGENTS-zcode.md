@@ -88,7 +88,7 @@ BAD (DO NOT emulate)：
 5. **派 reviewer2**:派 Agent→reviewer2 独立审查完整 diff(墙自动记账派发)
 6. **停下等用户授权**:两份 [HIGH|MEDIUM/LOW] 报告都拿到后**停下**,等用户明确说"提交"/"commit"/"push"或等义指令
 7. **submit**:授权后调用 git_gate(action:"submit", reviewerResult, reviewer2Result, highIssues, readmeStatus, readmeRationale) 提交闸门审批
-8. **commit → push**:git_gate(action:"commit") → git_gate(action:"push");首次推送或远端超前时需 force:true(工具内部走 --force-with-lease)
+8. **commit → push**:git_gate(action:"commit") → git_gate(action:"push");首次推送或远端超前时需 force:true(工具内部走 --force-with-lease);push 支持可选 remote/destBranch(默认 origin+当前分支,推其他 remote/分支时显式传参)
 
 ### 授权原则(权威)
 

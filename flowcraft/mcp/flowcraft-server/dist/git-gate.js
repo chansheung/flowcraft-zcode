@@ -25,6 +25,15 @@
 //      变更摘要写 stderr、stdout 恒空,原 execFileSync 只回 stdout 导致 push 恒显
 //      "(up to date)"(Mac 实测)。失败路径抛同形状错(status + stderr),
 //      [push error] 分支零改动;兜底文案仅在 stdout+stderr 皆空时出现。
+//   7. v0.7.8 push 支持可选 remote/destBranch:推任意已配置 remote 与目标分支
+//      (用例:推 zcode 分支到 main → remote:"zcode", destBranch:"main")。显式
+//      传入值过严格白名单 /^[\w][\w.\-]*$/(防参数注入);缺省 remote='origin'、
+//      destBranch=当前分支名(缺省值来自 git 自身,免校验,保默认路径与 0.7.7
+//      行为逐字节一致 —— 含 '/' 的本地分支名在默认路径下照旧可推)。
+//      readTrackingRef/isFastForward/gitPush 全链参数化:追踪引用、fetch、
+//      merge-base、lease 全部锚定 ${remote}/${destBranch};gitPush refspec 改显式
+//      HEAD:refs/heads/<destBranch>(与 0.7.7 裸 <branch> 语义等价:同源 commit、
+//      同目标 ref),force 的 lease 锚定目标分支名。默认 origin+同名分支行为不变。
 //
 // KEEP-IN-SYNC(原版 3 层角色分离的移植注记):
 //   (1) 工具 description = 选择期行为(前置防误路由);
@@ -650,8 +659,10 @@ function getCurrentBranch(projectDir) {
 // 他人提交")。返回值作为显式 lease 传给 push:--force-with-lease=<branch>:<本值>
 // —— 远端若动到我们上次所知之外,强推被拒。无追踪引用(首推)或读取/形状异常
 // 返回 "",调用方回落普通 --force-with-lease(现行为)。
-function readTrackingRef(projectDir, branch) {
-  const r = runGitReadOnly(['rev-parse', '--verify', `refs/remotes/origin/${branch}`], { cwd: projectDir, timeout: 5000 });
+// v0.7.8:参数化 (remote, destBranch) —— 读 refs/remotes/<remote>/<destBranch>;
+// 默认路径 remote='origin'、destBranch=当前分支名,所读引用与 0.7.7 一致。
+function readTrackingRef(projectDir, remote, destBranch) {
+  const r = runGitReadOnly(['rev-parse', '--verify', `refs/remotes/${remote}/${destBranch}`], { cwd: projectDir, timeout: 5000 });
   if (r.kind !== 'ok') return '';
   const v = r.stdout.trim();
   // 40 位 SHA-1 / 64 位 SHA-256 对象格式都放行;其余形状(空/带警告文本)一律弃用。
@@ -679,12 +690,14 @@ function gitCommit(projectDir, message) {
   return '';
 }
 
-// origin/<branch> 是否为 HEAD 的祖先(即本地可 fast-forward push)。先 fetch。
+// <remote>/<destBranch> 是否为 HEAD 的祖先(即本地可 fast-forward push)。先 fetch。
 // 四态判别联合:真正分歧 / fetch 失败(网络/SSH,URL 凭据脱敏)/ 检查失败,避免把
 // 网络问题误报为 "diverged"。
-function isFastForward(projectDir, branch) {
+// v0.7.8:参数化 (remote, destBranch) —— fetch <remote> <destBranch>,merge-base
+// 对 <remote>/<destBranch>;默认路径(origin+当前分支)与 0.7.7 命令逐字节相同。
+function isFastForward(projectDir, remote, destBranch) {
   try {
-    execFileSync('git', gitArgs(['fetch', 'origin', branch]), gitOptions({
+    execFileSync('git', gitArgs(['fetch', remote, destBranch]), gitOptions({
       cwd: projectDir, timeout: 20000, killSignal: 'SIGTERM',
     }));
   } catch (err) {
@@ -694,7 +707,7 @@ function isFastForward(projectDir, branch) {
       .replace(/:\/\/[^\s/@]+@/, '://***@'); // URL 内嵌凭据脱敏
     return { ok: false, reason: 'fetch-failed', detail };
   }
-  const mb = runGitReadOnly(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: projectDir, timeout: 5000 });
+  const mb = runGitReadOnly(['merge-base', '--is-ancestor', `${remote}/${destBranch}`, 'HEAD'], { cwd: projectDir, timeout: 5000 });
   if (mb.kind === 'ok') return { ok: true };
   if (mb.kind === 'error' && (mb.error?.status ?? mb.error?.code ?? mb.error?.exitCode) === 1) return { ok: false, reason: 'diverged' };
   if (mb.kind === 'timeout') return { ok: false, reason: 'check-failed', detail: 'merge-base check timed out (retried once)' };
@@ -703,7 +716,7 @@ function isFastForward(projectDir, branch) {
   return { ok: false, reason: 'check-failed', detail: firstLine || `exit ${mb.error?.status ?? 'unknown'}` };
 }
 
-// push 当前分支到 origin。force 时加 --force-with-lease(比 --force 安全)。
+// push HEAD 到 <remote> 的 <destBranch>。force 时加 --force-with-lease(比 --force 安全)。
 // v0.7.4:git push 的 refs 变更摘要("To <remote> ... <branch> -> <branch>")写在
 // stderr、stdout 恒空——execFileSync 成功路径只返回 stdout,上层恒显
 // "(up to date)"(Mac 实测)。改用 spawnSync(同一 gitOptions:数组参数 RCE 纪律/
@@ -715,11 +728,16 @@ function isFastForward(projectDir, branch) {
 // 当前值等于 baseline 才放行;远端在"我们上次所知"之后被动过(他人推送)即拒,
 // 提示先 fetch 审视。空值(首推无追踪引用/读取失败)回落普通 --force-with-lease
 // (现行为)。非 force push 不用 lease,零变化。
-function gitPush(projectDir, branch, force, leaseBaseline) {
+// v0.7.8:参数化 (remote, destBranch) —— refspec 改显式 HEAD:refs/heads/<destBranch>
+// (与 0.7.7 的裸 <branch> 语义等价:同源 commit、同目标 ref;git 自身摘要行会显
+// "HEAD -> <branch>" 而非 "<branch> -> <branch>",仅文案差异);force 的 lease 锚定
+// 目标分支名 --force-with-lease=<destBranch>:<baseline>(0.7.7 同名分支时两者恰
+// 相同)。默认路径 origin+同名分支的远端效果与 0.7.7 完全一致。
+function gitPush(projectDir, remote, destBranch, force, leaseBaseline) {
   const explicitLease = force && typeof leaseBaseline === 'string' && /^[0-9a-f]{6,64}$/i.test(leaseBaseline);
   const args = force
-    ? ['push', explicitLease ? `--force-with-lease=${branch}:${leaseBaseline}` : '--force-with-lease', 'origin', branch]
-    : ['push', 'origin', branch];
+    ? ['push', explicitLease ? `--force-with-lease=${destBranch}:${leaseBaseline}` : '--force-with-lease', remote, `HEAD:refs/heads/${destBranch}`]
+    : ['push', remote, `HEAD:refs/heads/${destBranch}`];
   const r = spawnSync('git', gitArgs(args), gitOptions({
     cwd: projectDir, timeout: 30000, killSignal: 'SIGTERM',
   }));
@@ -828,7 +846,7 @@ const DESCRIPTION = '主代理专用。Do NOT dispatch coder for stage/commit/pu
 const INPUT_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', description: "Action to perform: 'scan' (sensitive-file scan + gate status) | 'submit' (open gate after double review) | 'status' (gate report) | 'reset' (clear gate) | 'stage' (git add explicit files) | 'commit' (git commit, requires gate-approved) | 'push' (git push current branch to origin, requires fast-forward)" },
+    action: { type: 'string', description: "Action to perform: 'scan' (sensitive-file scan + gate status) | 'submit' (open gate after double review) | 'status' (gate report) | 'reset' (clear gate) | 'stage' (git add explicit files) | 'commit' (git commit, requires gate-approved) | 'push' (git push current branch to origin by default; optional remote/destBranch target any configured remote & branch, e.g. release channel; requires fast-forward)" },
     reviewerResult: { type: 'string', description: "Reviewer's review summary (for 'submit' action)" },
     reviewer2Result: { type: 'string', description: "Reviewer2's review summary (for 'submit' action)" },
     highIssues: { type: 'number', description: 'Number of HIGH issues found (0 = approved, >0 = rejected)' },
@@ -838,6 +856,8 @@ const INPUT_SCHEMA = {
     files: { type: 'array', items: { type: 'string' }, description: "Files to stage (action:'stage'). Explicit array — prevents accidental staging." },
     message: { type: 'string', description: "Commit message (action:'commit'). Generated by orchestrator." },
     force: { type: 'boolean', description: "Allow non-fast-forward push (action:'push', default false). Uses --force-with-lease." },
+    remote: { type: 'string', description: "Target remote for 'push' (default \"origin\"; any configured remote name, e.g. \"zcode\"). Strictly validated against /^[\\w][\\w.\\-]*$/ — no special chars." },
+    destBranch: { type: 'string', description: "Target branch on the remote for 'push' (default = current branch name). Use case: push current branch (e.g. shit4zc) to the release main branch → remote: \"zcode\", destBranch: \"main\". Strictly validated against /^[\\w][\\w.\\-]*$/ — no special chars (slash branch names rejected)." },
     cwd: { type: 'string', description: 'git 仓库目录(默认服务器 CWD;状态目录 .zcode-flowcraft 亦在该目录下)' },
   },
 };
@@ -1126,33 +1146,49 @@ function executeGitGate(args) {
     if (!branch || branch === 'HEAD') {
       return ok('[push BLOCKED] detached HEAD — cannot determine branch. Branch switching requires a coder sub-agent or manual operation.');
     }
+    // v0.7.8:push 目标参数化 —— remote 缺省 'origin',destBranch 缺省当前分支名。
+    // 仅"显式传入值"过严格白名单 /^[\w][\w.\-]*$/(首字符 [\w],后续 [\w.\-];拒绝
+    // 空格/引号/分号/斜杠/前导 '-' 等一切特殊字符,防参数注入 git argv;含 '/' 的
+    // 目标分支名被拒,需要时再扩白名单)。缺省值免校验:'origin' 是内置常量、当前
+    // 分支名来自 rev-parse,均由 git 自身保证安全 —— 这同时保证默认路径(origin+
+    // 同名分支)与 0.7.7 行为逐字节一致(含 '/' 的本地分支名在默认路径照旧可推)。
+    // 用例:推 zcode 分支到 main → remote:"zcode", destBranch:"main"。
+    const PUSH_NAME_RE = /^[\w][\w.\-]*$/;
+    const remote = args.remote != null ? String(args.remote) : 'origin';
+    if (args.remote != null && !PUSH_NAME_RE.test(remote)) {
+      return ok(`[push BLOCKED] invalid remote "${remote}" — must match /^[\\w][\\w.\\-]*$/ (word char first, then word/dot/dash only; no spaces or special chars). Use a configured remote name, e.g. "origin" or "zcode", or omit for "origin".`);
+    }
+    const destBranch = args.destBranch != null ? String(args.destBranch) : branch;
+    if (args.destBranch != null && !PUSH_NAME_RE.test(destBranch)) {
+      return ok(`[push BLOCKED] invalid destBranch "${destBranch}" — must match /^[\\w][\\w.\\-]*$/ (word char first, then word/dot/dash only; no spaces or special chars). Omit destBranch to push to the same-name branch on the remote.`);
+    }
     // v0.7.6 P2:fetch 之前记录本地追踪引用现值 —— isFastForward 内的 fetch 会把
     // 追踪引用刷成远端现值,届时再取就晚了(lease 恒过)。该值作为显式 lease 基线:
     // 远端若在"我们上次所知"之后动过(他人推送),强推被拒并提示先 fetch 审视。
-    const leaseBaseline = force ? readTrackingRef(projectDir, branch) : '';
-    const ff = isFastForward(projectDir, branch);
+    const leaseBaseline = force ? readTrackingRef(projectDir, remote, destBranch) : '';
+    const ff = isFastForward(projectDir, remote, destBranch);
     if (!ff.ok && !force) {
       if (ff.reason === 'fetch-failed') {
         if (ff.detail.includes('remote ref')) {
-          return ok(`[push BLOCKED] origin/${branch} does not exist on remote (first push?). Detail: ${ff.detail}`);
+          return ok(`[push BLOCKED] ${remote}/${destBranch} does not exist on remote (first push?). Detail: ${ff.detail}`);
         }
-        return ok(`[push BLOCKED] Could not fetch origin/${branch} — network/SSH error: ${ff.detail}. Check connection (e.g. SSH port blocked?) and retry, or re-run with force:true.`);
+        return ok(`[push BLOCKED] Could not fetch ${remote}/${destBranch} — network/SSH error: ${ff.detail}. Check connection (e.g. SSH port blocked?) and retry, or re-run with force:true.`);
       }
       if (ff.reason === 'check-failed') {
-        return ok(`[push BLOCKED] Could not verify fast-forward status for origin/${branch} — merge-base check failed (${ff.detail}). This is NOT a divergence: the check timed out or errored. Retry, or re-run with force:true if you are certain the history is safe.`);
+        return ok(`[push BLOCKED] Could not verify fast-forward status for ${remote}/${destBranch} — merge-base check failed (${ff.detail}). This is NOT a divergence: the check timed out or errored. Retry, or re-run with force:true if you are certain the history is safe.`);
       }
-      return ok(`[push BLOCKED] origin/${branch} is ahead or diverged. Pull/merge first, or re-run with force:true (uses --force-with-lease).`);
+      return ok(`[push BLOCKED] ${remote}/${destBranch} is ahead or diverged. Pull/merge first, or re-run with force:true (uses --force-with-lease).`);
     }
     let result;
     try {
-      result = gitPush(projectDir, branch, force, leaseBaseline);
+      result = gitPush(projectDir, remote, destBranch, force, leaseBaseline);
     } catch (err) {
       const code = err?.status ?? err?.code ?? 'unknown';
       const stderr = String(err?.stderr ?? err?.message ?? '').slice(0, 500);
       // P2:force 被拒时说明 lease 语义 —— 远端动到了我们上次所知之外,先 fetch
       // 审视他人提交,再重走流程(第二次 push 的基线已是 fetch 后的新所知)。
       const leaseHint = force
-        ? `\n[force-with-lease rejected] Explicit lease baseline was ${leaseBaseline ? `${leaseBaseline.slice(0, 12)} (origin/${branch} as we last knew it, recorded BEFORE fetch)` : 'N/A — no tracking ref, plain --force-with-lease'}. The remote moved beyond what we last knew (someone pushed). Fetch and review the new remote commits first, then re-run the push flow.`
+        ? `\n[force-with-lease rejected] Explicit lease baseline was ${leaseBaseline ? `${leaseBaseline.slice(0, 12)} (${remote}/${destBranch} as we last knew it, recorded BEFORE fetch)` : 'N/A — no tracking ref, plain --force-with-lease'}. The remote moved beyond what we last knew (someone pushed). Fetch and review the new remote commits first, then re-run the push flow.`
         : '';
       return ok(`[push error] exit ${code}: ${stderr}${leaseHint}`);
     }
@@ -1160,9 +1196,9 @@ function executeGitGate(args) {
     // "(up to date)" 兜底仅在两者皆空时出现。
     // v0.7.6 P2:force 输出注明所用 lease 基线值(空 = 无追踪引用,回落普通 lease)。
     const leaseNote = force
-      ? ` (force-with-lease${leaseBaseline ? `, lease baseline ${leaseBaseline.slice(0, 12)} = pre-fetch origin/${branch}` : ' — no tracking ref, lease vs current tracking'})`
+      ? ` (force-with-lease${leaseBaseline ? `, lease baseline ${leaseBaseline.slice(0, 12)} = pre-fetch ${remote}/${destBranch}` : ' — no tracking ref, lease vs current tracking'})`
       : '';
-    return ok(`=== PUSHED ${branch} → origin/${branch}${leaseNote} ===\n${result || '(up to date)'}`);
+    return ok(`=== PUSHED ${branch} → ${remote}/${destBranch}${leaseNote} ===\n${result || '(up to date)'}`);
   }
 
   return ok(`Unknown action "${action}". Use: 'scan', 'submit', 'status', 'reset', 'stage', 'commit', or 'push'.`);
