@@ -1,6 +1,6 @@
 {
   "name": "flowcraft",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Multi-agent orchestration for ZCode — explore/planner/coder double-review pipeline, git gate, background jobs job_start/job_wait/job_status/job_list MCP tools live (M4) — main agent is wall-blocked from job_start; dispatch coder for long tasks; grill-me/grilling skills ported (M4.6)",
   "author": { "name": "well" },
   "keywords": ["flowcraft", "orchestration", "review"],

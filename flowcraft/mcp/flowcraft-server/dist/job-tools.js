@@ -44,6 +44,7 @@
 //  11. v0.7.6 P4:惰性清理加孤儿 tmux 会话回收(无 .json 记录且 session_created
 //      超 14 天的 flowcraft-job-* 才杀,保守语义;仅 POSIX 且 tmux 存在时执行)。
 //      v0.7.6 P5:JobRunner 构造时给 <root>/.zcode-flowcraft 落自忽略 .gitignore。
+//  12. v0.7.7:job_wait 默认 600000→480000(新增 JOB_WAIT_DEFAULT_MS,ZCode 子代理 600s 活动看门狗规避);⏳ "still running" 选项 (1) 追加子代理约束(等满 480000ms 即交棒不再续等;第 5 条"逐字保留"对该文案失效)。
 //
 // WAIT_SLICE_MAX(Plan-B 降级开关):.mcp.json 已设 flowcraft 服务器
 // timeoutMs=7500000(2h5min)> job_wait 内部 2h 硬顶,正常路径内部优雅超时
@@ -63,8 +64,9 @@ const gitGate = require('./git-gate.js');
 // =============================================================================
 // 常量 —— 移植自原版 src/constants.ts
 // =============================================================================
-// job_wait 轮询间隔序列 (ms):渐长间隔,先密后疏,避免长任务(默认 10 分钟,
-// hard cap 2 小时)产生过多轮询。序列:4s×2 → 5s×2 → 10s×4 → 20s×4 → 30s×剩余。
+// job_wait 轮询间隔序列 (ms):渐长间隔,先密后疏,避免长任务(默认 8 分钟
+// [v0.7.7 起,原 10 分钟;见 JOB_WAIT_DEFAULT_MS],hard cap 2 小时)产生过多
+// 轮询。序列:4s×2 → 5s×2 → 10s×4 → 20s×4 → 30s×剩余。
 const JOB_WAIT_INTERVALS = [4000, 4000, 5000, 5000, 10000, 10000, 10000, 10000, 20000, 20000, 20000, 20000, 30000];
 // job_start 命令长度上限 (chars)
 const MAX_JOB_COMMAND_LENGTH = 10000;
@@ -77,6 +79,11 @@ const CLEANUP_THROTTLE_MS = 30 * 60 * 1000;
 // job_wait 单次切片硬顶(Plan-B 降级开关,见文件头注释;当前 7200000=2h,
 // 与内部 2h 硬顶同值 → 无操作钳制;改 25000 即降级为短切片链式等待)
 const WAIT_SLICE_MAX = 7200000;
+// v0.7.7:job_wait 默认超时。ZCode 子代理活动看门狗在单一工具调用连续阻塞满
+// 600s(600000ms)无活动时杀掉整个子代理(部分版本实证,如 3.8.1/Linux);
+// 480s 默认留 2 分钟余量。MCP 服务端无法识别调用方(payload 无 caller 身份),
+// 故默认对全体降低;主代理显式传参仍可至 7200000(2h)。
+const JOB_WAIT_DEFAULT_MS = 480000;
 
 const TMUX_SESSION_RE = /^flowcraft-job-\d+-[a-z0-9]+$/;
 const SAFE_ID_RE = /^job-\d+-[a-z0-9]+$/;
@@ -629,13 +636,13 @@ const TOOLS = [
   {
     name: 'job_wait',
     description:
-      'Wait for a background job to complete. Blocks until the job finishes or timeout (default 10 min, hard cap 2 h). Returns final status + output tail. Prefer this over repeated job_status polling. ' +
-      'long waits are the main agent\'s duty (up to 2h per call, chain on timeout).' + BETA,
+      'Wait for a background job to complete. Blocks until the job finishes or timeout (default 8 min, hard cap 2 h). Returns final status + output tail. Prefer this over repeated job_status polling. ' +
+      'long waits are the main agent\'s duty (up to 2h per call, chain on timeout). Inside subagents, keep each single call ≤ 480000ms (ZCode kills the subagent after 600s of inactivity on some builds); hand longer waits to the main agent.' + BETA,
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Job ID to wait for' },
-        timeoutMs: { type: 'number', description: 'Max wait in ms (default 600000 = 10min, hard cap 7200000 = 2h)' },
+        timeoutMs: { type: 'number', description: 'Max wait in ms (default 480000 = 8min, hard cap 7200000 = 2h). Subagents are killed by ZCode core after 600s of inactivity on some builds — keep each call ≤ 480000ms inside subagents; only the main agent should pass larger values' },
       },
       required: ['id'],
     },
@@ -728,7 +735,7 @@ async function implJobWait(args) {
   // WAIT_SLICE_MAX 为 Plan-B 降级开关(见文件头):当前 7200000 下第三个参数是
   // 无操作钳制;若客户端不采纳 .mcp.json 的 timeoutMs,把它改 25000 即降级为
   // 短切片链式等待,其余零改动。
-  const cap = Math.max(0, Math.min(args.timeoutMs ?? 600000, 7200000, WAIT_SLICE_MAX));
+  const cap = Math.max(0, Math.min(args.timeoutMs ?? JOB_WAIT_DEFAULT_MS, 7200000, WAIT_SLICE_MAX));
   const FENCE = '```';
   const runner = getRunner(getRoot());
 
@@ -769,9 +776,11 @@ async function implJobWait(args) {
   return [
     final.status !== 'running'
       ? `✅ Job ${final.status} (exit code: ${final.exitCode ?? 'N/A'})`
-      // 唯一契约改动:选项 (2) 由原版 coder 视角 "report the job ID ... to the
-      // orchestrator if fire-and-forget" 改为调用方中立表述;选项 (1) 逐字保留。
-      : `⏳ Job still running after ${Math.round(cap / 1000)}s — choose: (1) job_wait again with a longer timeoutMs if you need the result, (2) continue other work and check later with job_status (job id: ${id}).`,
+      // 契约改动:选项 (2) 由原版 coder 视角 "report the job ID ... to the
+      // orchestrator if fire-and-forget" 改为调用方中立表述;选项 (1) v0.7.7 补
+      // 子代理约束(等满 480000ms 仍未完成即报 job id 交棒收任务,不再续等;
+      // 更长续等仅限主代理,至多 7200000),其余逐字保留。
+      : `⏳ Job still running after ${Math.round(cap / 1000)}s — choose: (1) job_wait again with a longer timeoutMs if you need the result (main agent: up to 7200000; subagents: do NOT re-wait after a full 480000ms wait — report the job id and end your task), (2) continue other work and check later with job_status (job id: ${id}).`,
     ``,
     `Output (tail):`,
     FENCE,

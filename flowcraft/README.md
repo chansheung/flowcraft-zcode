@@ -1,4 +1,4 @@
-# flowcraft (M1 骨架, v0.7.6)
+# flowcraft (M1 骨架, v0.7.7)
 
 flowcraft v0.7.2(OpenCode 编程式插件)→ ZCode 声明式插件的迁移产物。迁移蓝图:`Downloads/flowcraft-zcode-migration-blueprint.md`(v1.2)。本包 = 蓝图 **M1 里程碑**精简版:7 个子代理 + 行为规则模板,job_*(M4)已上线。命令、技能、vision 代理按需求裁剪,要恢复时从源材料拷回即可(蓝图 §1.5/§1.6)。
 
@@ -64,4 +64,5 @@ M4.6(0.7.2)  grill-me/grilling 技能上游移植 + coder frontmatter 加 Skill 
 0.7.4        Mac 实测三修复:账本并发竞态(锁+原子写)/tmux 按次探测/git_gate push 输出 ✅(2026-08-19)
 0.7.5        AGENTS-zcode.md 瘦身(204→~170 行,规则零丢失) + writer.md 删与墙矛盾的 AGENTS.md 例外句 ✅(2026-08-19)
 0.7.6        Linux 实测六修复:scan 审批陈旧性展示/force-with-lease 显式基线/trap printf 真换行/孤儿 tmux 回收/状态目录自忽略/清单分支措辞 ✅(2026-08-19)
+0.7.7        job_wait 默认等待 600000ms→480000ms,规避 ZCode 子代理活动看门狗(单一工具调用阻塞满 600s 无活动即被杀,线上两次 coder 死亡根因;主代理 2h 长等待协议不变);coder.md/AGENTS-zcode.md 等待协议同步为 8 分钟边界 ✅(2026-08-20)
 ```

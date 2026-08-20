@@ -112,7 +112,7 @@ gate approved ≠ user authorized to commit。提交类动作(submit/stage/commi
 
 ### 长任务监控
 
-coder 报来 job ID 后由主代理承接:用 `mcp__plugin_flowcraft_flowcraft__job_wait` 等待(单次最长 2h);到点仍未完 → 再次 job_wait 链式续等,无次数上限;或按任务性质先做其他工作、稍后 job_status/job_list 查询。主代理自己不得 job_start(墙会拒绝并提示派发 coder)。coder 的分级等待协议见其 agent 定义(先 1-2 分钟评估等待,估 >10 分钟即交棒)。
+coder 报来 job ID 后由主代理承接:用 `mcp__plugin_flowcraft_flowcraft__job_wait` 等待(单次最长 2h);到点仍未完 → 再次 job_wait 链式续等,无次数上限;或按任务性质先做其他工作、稍后 job_status/job_list 查询。主代理自己不得 job_start(墙会拒绝并提示派发 coder)。coder 的分级等待协议见其 agent 定义(单次 job_wait 一律 ≤480000ms,含评估等待;估 >8 分钟即交棒——ZCode 看门狗在子代理连续 600s 无活动时杀掉子代理,10 分钟级阻塞必死)。
 
 ### 续接子代理(resume)
 
