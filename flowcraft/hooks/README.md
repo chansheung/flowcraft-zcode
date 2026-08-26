@@ -9,6 +9,7 @@
 - **job_start 精确拒绝(0.7.0, M4)**:主代理禁启动后台作业(quota_reset 同构特判,置于前缀放行之前);job_wait/job_status/job_list 走前缀放行
 - **SendMessage 精确拒绝(0.7.1, M4.5)**:默认拒绝;凭 MCP resume_authorize 落的单次授权标记(`.zcode-flowcraft/resume-auth.json`,10 分钟 TTL、agentId 精确匹配 toolInput.to)放行一条即焚(unlink);此分支 fail-closed(局部例外,理由见代码注释)
 - 读取走配额通道:内置 Read/Glob/Grep 已拒止,改用 flowcraft 服务器工具 read / glob / grep(实际注册名带命名空间前缀 `mcp__plugin_flowcraft_flowcraft__`,0.2.1 起墙按前缀放行本插件全部工具):read 3 次/轮、glob 免配额、grep 5 次/轮;截断(≤200 行/4000 字符)与敏感路径拦截在工具内
+- **Read 媒体例外(0.7.10)**:内置 Read 仅当目标为图片/视频扩展名(png/jpg/jpeg/gif/webp/bmp/ico/tif/tiff/avif/mp4/mov/webm)时放行,恢复主代理看图/看视频;无扩展名/未知扩展名/路径取不到一律拒绝,文本读取仍走配额通道,配额治理不受影响;但超大媒体文件(高分辨率图/长视频)的读取不受配额与截断管束,token 成本自行斟酌
 - PostToolUse(matcher `^Agent$`)已注册:主代理每次派发后 touch `.zcode-flowcraft/quota-reset.marker`,服务器下次配额调用自动重置;`mcp__plugin_flowcraft_flowcraft__quota_reset` 手动兜底
 - **principles 注入闸门(0.4.2,墙内集成)**:Agent 派发 prompt 缺"## 设计原则"块且存在可注入原则时 exit 2 携带现成块拒止,重发即过;无原则静默放行(单一 hook 入口,不依赖多 hook 顺序)
 - **subagent_type 白名单(0.4.5,墙扩展)**:Agent 派发时检查目标是否在 agents/ 定义的白名单内,内置代理(planner/coder/reviewer/reviewer2/writer/analyst/explore)以外拒止

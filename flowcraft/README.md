@@ -1,4 +1,4 @@
-# flowcraft (M1 骨架, v0.7.9)
+# flowcraft (M1 骨架, v0.7.10)
 
 flowcraft v0.7.2(OpenCode 编程式插件)→ ZCode 声明式插件的迁移产物。迁移蓝图:`Downloads/flowcraft-zcode-migration-blueprint.md`(v1.2)。本包 = 蓝图 **M1 里程碑**精简版:7 个子代理 + 行为规则模板,job_*(M4)已上线。命令、技能、vision 代理按需求裁剪,要恢复时从源材料拷回即可(蓝图 §1.5/§1.6)。
 
@@ -67,4 +67,5 @@ M4.6(0.7.2)  grill-me/grilling 技能上游移植 + coder frontmatter 加 Skill 
 0.7.7        job_wait 默认等待 600000ms→480000ms,规避 ZCode 子代理活动看门狗(单一工具调用阻塞满 600s 无活动即被杀,线上两次 coder 死亡根因;主代理 2h 长等待协议不变);coder.md/AGENTS-zcode.md 等待协议同步为 8 分钟边界 ✅(2026-08-20)
 0.7.8        git_gate push 新增可选 remote/destBranch 参数(默认 origin+当前分支,行为不变),支持经闸门直推发布通道 chansheung/flowcraft-zcode(remote:"zcode", destBranch:"main") ✅(2026-08-20)
 0.7.9        writer/explore/reviewer2/analyst 四个子代理模型 GLM-5.3→GLM-5.3-Flash,thoughtLevel 统一 max(writer/explore 原为 low、reviewer2 原为 high) ✅(2026-08-26)
+0.7.10       主代理墙 Read 多模态开孔:仅图片/视频扩展名(png/jpg/jpeg/gif/webp/bmp/ico/tif/tiff/avif/mp4/mov/webm)放行内置 Read,文本读取仍配额通道——恢复 Flash 系主代理(GLM-5.3-Flash 多模态)看图/看视频能力,治理不变 ✅(2026-08-26)
 ```

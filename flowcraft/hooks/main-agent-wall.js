@@ -21,6 +21,8 @@
 // v0.7.4 并发安全:派发账本读改写改走 ledger-io.js 的 withLedger(目录锁串行化 +
 // tmp/rename 原子落盘)——并行双审时多 wall 进程并发写会丢条目/写坏文件致 submit 全拒(Mac 实测),
 // fail-open 语义不变(锁超时/异常静默放弃,绝不阻断派发)。
+// v0.7.10 Read 多模态开孔:仅当目标文件是图片/视频扩展名时放行内置 Read(恢复 Flash 系视觉),
+// 文本读取仍走配额通道(v1 定案零改动)——二进制媒体无"文本旁路配额"问题,治理无损。
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -39,6 +41,10 @@ const SUBAGENT_TYPES = new Set([
   'planner', 'coder', 'reviewer', 'reviewer2', 'writer', 'analyst', 'explore',
 ]);
 const SUBAGENT_NS = 'flowcraft:';
+// Read 多模态开孔(v0.7.10):内置 Read 仅对图片/视频扩展名放行(取路径用
+// toolInput/tool_input 双容器 + file_path/filePath 变体,与 subagent_type 取法同源;
+// 详见下方 SendMessage 块之后的 Read 例外分支)。
+const MEDIA_EXT = new Set(['.png','.jpg','.jpeg','.gif','.webp','.bmp','.ico','.tif','.tiff','.avif','.mp4','.mov','.webm']);
 
 let d = '';
 process.stdin.on('data', c => (d += c));
@@ -111,6 +117,17 @@ process.stdin.on('end', () => {
     process.exit(2);
   }
 
+  // v0.7.10 Read 多模态开孔:仅媒体扩展名放行——目标路径 extname 小写后命中 MEDIA_EXT 才
+  // exit 0(恢复 Flash 系视觉)。无扩展名/未知扩展名/取不到路径一律不放行,自然落入
+  // 下方通用拒绝(文本读取走配额通道指引,fail-closed 保治理)。本分支是纯字符串比对,
+  // 无 IO 无异常面,exit 0 为确定性放行,不触碰 wall 的 fail-open 铁律。
+  if (tool === 'Read') {
+    const ti = input.toolInput || input.tool_input || {};
+    const fp = String(ti.file_path || ti.filePath || '');
+    const ext = fp ? path.extname(fp).toLowerCase() : '';
+    if (ext && MEDIA_EXT.has(ext)) process.exit(0);
+  }
+
   if (ALLOW.has(tool) || tool.startsWith(FLOWCRAFT_MCP_PREFIX)) {
     if (tool === 'Agent') {
       try {
@@ -175,7 +192,7 @@ process.stdin.on('end', () => {
 
   const guide =
     tool === 'Read' || tool === 'Glob' || tool === 'Grep'
-      ? '读取走配额通道:用 flowcraft 服务器工具(本会话名 mcp__plugin_flowcraft_flowcraft__read / __glob / __grep;超配额时通过 Agent 派发子代理)'
+      ? '读取走配额通道:用 flowcraft 服务器工具(本会话名 mcp__plugin_flowcraft_flowcraft__read / __glob / __grep;超配额时通过 Agent 派发子代理);图片/视频(限 png/jpg/jpeg/gif/webp/bmp/mp4 等已收录扩展名)可直接 Read(多模态开孔)'
       : tool === 'WebFetch' || tool === 'WebSearch'
         ? 'web/API 调研通过 Agent 工具派发 explore'
         : tool === 'Bash' || tool === 'Edit' || tool === 'Write'

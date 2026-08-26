@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// flowcraft-server v0.7.9(VERSION 常量,与 .zcode-plugin/plugin.json 的 version 同步改)
+// flowcraft-server v0.7.10(VERSION 常量,与 .zcode-plugin/plugin.json 的 version 同步改)
 // —— 配额三件套 + quota_reset + git_read + git_gate + principles + job_*(零依赖 stdio MCP 服务器)
 // 主代理专用读取通道:read 3 次/轮、grep 5 次/轮;glob 免配额;截断 ≤200 行/4000 字符;
 // 敏感路径(.env/密钥/凭据类)直接拒;Agent 派发(touch quota-reset.marker)或 quota_reset 重置。
@@ -18,7 +18,7 @@ const { spawn: cpSpawn, execSync, execFileSync } = require('child_process');
 
 // 版本单一来源:initialize 的 serverInfo 与本文件头注释都引用它;改版时与
 // .zcode-plugin/plugin.json 的 version 保持同步(0.7.0 两侧同步升)。
-const VERSION = '0.7.9';
+const VERSION = '0.7.10';
 
 const gitGate = require('./git-gate.js');
 // M4a:后台作业四工具(TOOLS/IMPL 导出形状与 git-gate.js 同款注册模式)

@@ -120,7 +120,7 @@ SendMessage 默认被墙拒绝。仅当用户主动提出续接某个已完成�
 
 ## 主代理读取规范(配额三件套)
 
-- 主代理读取一律走 flowcraft 服务器工具 read / glob / grep(实际注册名带前缀 `mcp__plugin_flowcraft_flowcraft__`;带配额 read=3 / grep=5、截断 ≤200 行/4000 字符、敏感路径拦截),不使用内置 Read/Grep 直读大块内容。
+- 主代理读取一律走 flowcraft 服务器工具 read / glob / grep(实际注册名带前缀 `mcp__plugin_flowcraft_flowcraft__`;带配额 read=3 / grep=5、截断 ≤200 行/4000 字符、敏感路径拦截),不使用内置 Read/Grep 直读大块内容(图片/视频文件除外,可直接 Read)。
 - 配额按轮重置:每次 Agent 派发后重置(PostToolUse 自动 + quota_reset 工具手动兜底;漏 reset 只会更紧不会更松)。
 - 超配额时的正确动作:通过 Agent 派发子代理(任意子代理,不限于 explore)完成读取密集型工作。
 
