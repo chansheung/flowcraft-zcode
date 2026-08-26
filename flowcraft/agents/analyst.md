@@ -1,7 +1,7 @@
 ---
 name: analyst
 description: Analysis & reasoning specialist - answers judgment questions (is/does/consistent/compare/why, interpret results/metrics/logs) with evidence-based verdicts; read-only (no execution)
-model: GLM-5.3
+model: GLM-5.3-Flash
 thoughtLevel: max
 tools: Read, Glob, Grep, WebFetch, mcp__plugin_flowcraft_flowcraft__git_read
 maxTurns: 40

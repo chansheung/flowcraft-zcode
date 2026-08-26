@@ -1,8 +1,8 @@
 ---
 name: reviewer2
 description: Code reviewer (secondary) - catches bugs and quality issues, alternative model perspective for double review. Read-only, same standard as reviewer.
-model: GLM-5.3
-thoughtLevel: high
+model: GLM-5.3-Flash
+thoughtLevel: max
 tools: Read, Glob, Grep, mcp__plugin_flowcraft_flowcraft__git_read
 maxTurns: 30
 injectAgentsMd: false

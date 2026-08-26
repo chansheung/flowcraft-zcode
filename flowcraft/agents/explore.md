@@ -1,8 +1,8 @@
 ---
 name: explore
 description: Codebase exploration specialist - explores code via read/glob/grep tools (NOT shell commands), researches APIs, maps project structures. No bash. Delivers facts (locate/map/trace), not verdicts.
-model: GLM-5.3
-thoughtLevel: low
+model: GLM-5.3-Flash
+thoughtLevel: max
 tools: Read, Glob, Grep, WebFetch
 maxTurns: 30
 injectAgentsMd: false

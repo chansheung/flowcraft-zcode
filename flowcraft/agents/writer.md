@@ -1,8 +1,8 @@
 ---
 name: writer
 description: Writing specialist - generates high-quality prose, documentation, and reports. Handles ALL .md files in the project - .md edits belong here, never coder.
-model: GLM-5.3
-thoughtLevel: low
+model: GLM-5.3-Flash
+thoughtLevel: max
 tools: Edit, Write, Read, Glob, Grep, WebFetch, mcp__plugin_flowcraft_flowcraft__git_read
 maxTurns: 40
 injectAgentsMd: false
